@@ -243,7 +243,8 @@ details summary::-webkit-details-marker{display:none}
       <input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
     </div>
     <button class="btn-login" id="btn-login-do" onclick="doLogin()">Entrar</button>
-    <button class="btn-login-sec" id="btn-login-ano" onclick="doAnon()">Continuar sin cuenta</button>
+    <button class="btn-login-sec" id="btn-login-ano" onclick="doAnon()">Continuar sin cuenta (sin login)</button>
+    <div id="login-debug" style="font-size:10px;color:rgba(255,255,255,.4);margin-top:8px;text-align:center;display:none"></div>
     <div class="login-err" id="login-err"></div>
   </div>
 </div>
@@ -1086,10 +1087,13 @@ window.switchLoginTab = function(t) {
 
 window.doLogin = async function() {
   const email = document.getElementById('l-email').value.trim();
-  const pass = document.getElementById('l-pass').value;
-  const err = document.getElementById('login-err');
+  const pass  = document.getElementById('l-pass').value;
+  const err   = document.getElementById('login-err');
+  const btn   = document.getElementById('btn-login-do');
   err.textContent = '';
   if (!email || !pass) { err.textContent = 'Completa email y contraseña.'; return; }
+  btn.textContent = '⏳ Entrando...';
+  btn.disabled = true;
   try {
     if (loginTab === 'login') {
       await signInWithEmailAndPassword(auth, email, pass);
@@ -1097,23 +1101,35 @@ window.doLogin = async function() {
       await createUserWithEmailAndPassword(auth, email, pass);
     }
   } catch(e) {
+    console.error('Firebase auth error:', e.code, e.message);
     const msgs = {
-      'auth/invalid-credential': 'Email o contraseña incorrectos.',
-      'auth/user-not-found': 'No existe una cuenta con ese email.',
-      'auth/wrong-password': 'Contraseña incorrecta.',
-      'auth/email-already-in-use': 'Ese email ya tiene una cuenta. Usá "Entrar".',
-      'auth/weak-password': 'La contraseña debe tener al menos 6 caracteres.',
-      'auth/invalid-email': 'Email invalido.',
+      'auth/invalid-credential':   'Email o contraseña incorrectos.',
+      'auth/user-not-found':       'No existe cuenta con ese email.',
+      'auth/wrong-password':       'Contraseña incorrecta.',
+      'auth/email-already-in-use': 'Ese email ya tiene cuenta. Usá Entrar.',
+      'auth/weak-password':        'La contraseña debe tener al menos 6 caracteres.',
+      'auth/invalid-email':        'Email inválido.',
+      'auth/network-request-failed': 'Sin conexión a internet.',
+      'auth/unauthorized-domain':  'Dominio no autorizado en Firebase. Agregá mauricio503.github.io en Firebase Console > Authentication > Settings > Authorized domains.',
+      'auth/operation-not-allowed': 'El método Email/Contraseña no está habilitado en Firebase.',
     };
-    err.textContent = msgs[e.code] || 'Error: ' + e.message;
+    err.style.color = '#ff8a80';
+    err.textContent = msgs[e.code] || ('Error ' + e.code + ': ' + e.message);
+  } finally {
+    btn.textContent = loginTab === 'login' ? 'Entrar' : 'Crear cuenta';
+    btn.disabled = false;
   }
 };
 
 window.doAnon = async function() {
+  const err = document.getElementById('login-err');
+  err.textContent = '⏳ Entrando...';
   try {
     await signInAnonymously(auth);
   } catch(e) {
-    document.getElementById('login-err').textContent = 'Error: ' + e.message;
+    console.error('Anon auth error:', e.code, e.message);
+    err.style.color = '#ff8a80';
+    err.textContent = 'Error modo anonimo: ' + e.code + ' — ' + e.message;
   }
 };
 
