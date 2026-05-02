@@ -6,6 +6,9 @@
 <meta name="theme-color" content="#3A1078">
 <title>Kakebo PRO+ 2026</title>
 <link rel="manifest" href="./manifest.json">
+<!-- Firebase CDN compat - funciona en cualquier hosting sin configuración -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -987,9 +990,7 @@ details summary::-webkit-details-marker{display:none}
 </div><!-- /app-screen -->
 <div class="toast" id="toast"></div>
 
-<script type="module">
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js';
-import { getFirestore, doc, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js';
+<script>
 
 const firebaseConfig = {
   apiKey: "AIzaSyCRv4xTmPXiptdssX8_PYdBpRSpWRVUY10",
@@ -1000,8 +1001,8 @@ const firebaseConfig = {
   appId: "1:640118647734:web:3cfc831108550591836f17"
 };
 
-const fbApp = initializeApp(firebaseConfig);
-const db = getFirestore(fbApp);
+const fbApp = firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
 
 // ─── ESTADO GLOBAL ───
 const HOY = new Date().toISOString().slice(0, 10);
@@ -1047,9 +1048,9 @@ function localLoad() {
 
 async function firestoreLoad(uid) {
   try {
-    const ref = doc(db, 'kakebo_users', uid);
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
+    const ref = db.collection('kakebo_users').doc(uid);
+    const snap = await ref.get();
+    if (snap.exists) {
       const remote = snap.data();
       // Firestore tiene prioridad sobre local
       ST = { ...ST, ...remote };
@@ -1063,8 +1064,8 @@ async function firestoreSave() {
   const uid = getUserId();
   if (!uid) return;
   try {
-    const ref = doc(db, 'kakebo_users', uid);
-    await setDoc(ref, ST);
+    const ref = db.collection('kakebo_users').doc(uid);
+    await ref.set(ST);
     const el = document.getElementById('saved-ind');
     if (el) el.innerHTML = '<span class="sync-dot"></span>guardado ✓';
     setTimeout(() => { if(el) el.innerHTML = '<span class="sync-dot"></span>sync'; }, 1500);
