@@ -230,22 +230,19 @@ details summary::-webkit-details-marker{display:none}
     <div class="login-logo">📊</div>
     <h1>Kakebo PRO+ 2026</h1>
     <p>Tu plan de libertad financiera.<br>Deudas · Habitos · Padre Rico</p>
-    <div class="login-tab-row">
-      <button class="login-tab on" id="lt-login" onclick="switchLoginTab('login')">Entrar</button>
-      <button class="login-tab" id="lt-reg" onclick="switchLoginTab('reg')">Registrarse</button>
+    <div id="login-form-area">
+      <div class="login-input-group">
+        <label>Tu nombre o apodo</label>
+        <input type="text" id="l-nombre" placeholder="ej: Mauri" autocomplete="name">
+      </div>
+      <div class="login-input-group">
+        <label>PIN de 4 dígitos</label>
+        <input type="password" id="l-pin" placeholder="••••" maxlength="4" inputmode="numeric" pattern="[0-9]*" onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <button class="btn-login" id="btn-login-do" onclick="doLogin()">Entrar / Registrarse</button>
+      <div class="login-err" id="login-err"></div>
+      <p style="color:rgba(255,255,255,.5);font-size:11px;margin-top:12px;line-height:1.5">Primera vez: escribí tu nombre y elegí un PIN de 4 números. Próximas veces: usá el mismo nombre y PIN.<br>Tus datos se guardan en este dispositivo.</p>
     </div>
-    <div class="login-input-group">
-      <label>Email</label>
-      <input type="email" id="l-email" placeholder="tu@email.com" autocomplete="email">
-    </div>
-    <div class="login-input-group">
-      <label>Contraseña</label>
-      <input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
-    </div>
-    <button class="btn-login" id="btn-login-do" onclick="doLogin()">Entrar</button>
-    <button class="btn-login-sec" id="btn-login-ano" onclick="doAnon()">Continuar sin cuenta (sin login)</button>
-    <div id="login-debug" style="font-size:10px;color:rgba(255,255,255,.4);margin-top:8px;text-align:center;display:none"></div>
-    <div class="login-err" id="login-err"></div>
   </div>
 </div>
 
@@ -992,8 +989,7 @@ details summary::-webkit-details-marker{display:none}
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js';
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js';
-import { getFirestore, doc, getDoc, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js';
+import { getFirestore, doc, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js';
 
 const firebaseConfig = {
   apiKey: "AIzaSyCRv4xTmPXiptdssX8_PYdBpRSpWRVUY10",
@@ -1005,7 +1001,6 @@ const firebaseConfig = {
 };
 
 const fbApp = initializeApp(firebaseConfig);
-const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
 
 // ─── ESTADO GLOBAL ───
@@ -1032,35 +1027,56 @@ let unsubFirestore = null;
 let evoChart = null, balChart = null, calMes = MES_ACT;
 let saveDebounce = null;
 
-// ─── FIREBASE SYNC ───
-async function loadFromFirestore(uid) {
+// ─── STORAGE LOCAL + FIRESTORE SYNC ───
+const LS_KEY = 'kakebo_pro_data';
+
+function getUserId() {
+  // ID basado en nombre+pin hasheado, sin Firebase Auth
+  return currentUser ? currentUser.uid : null;
+}
+
+function localLoad() {
   try {
-    const ref = doc(db, 'usuarios', uid, 'data', 'kakebo');
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      ST = { ...ST, ...parsed };
+    }
+  } catch(e) { console.warn('Local load error:', e); }
+}
+
+async function firestoreLoad(uid) {
+  try {
+    const ref = doc(db, 'kakebo_users', uid);
     const snap = await getDoc(ref);
     if (snap.exists()) {
       const remote = snap.data();
+      // Firestore tiene prioridad sobre local
       ST = { ...ST, ...remote };
+      // Actualizar local con datos de Firestore
+      localStorage.setItem(LS_KEY, JSON.stringify(ST));
     }
-  } catch(e) { console.warn('Load error:', e); }
+  } catch(e) { console.warn('Firestore load error (usando local):', e); }
 }
 
-async function saveToFirestore() {
-  if (!currentUser) return;
+async function firestoreSave() {
+  const uid = getUserId();
+  if (!uid) return;
   try {
-    const ref = doc(db, 'usuarios', currentUser.uid, 'data', 'kakebo');
+    const ref = doc(db, 'kakebo_users', uid);
     await setDoc(ref, ST);
     const el = document.getElementById('saved-ind');
     if (el) el.innerHTML = '<span class="sync-dot"></span>guardado ✓';
     setTimeout(() => { if(el) el.innerHTML = '<span class="sync-dot"></span>sync'; }, 1500);
-  } catch(e) { console.warn('Save error:', e); }
+  } catch(e) { console.warn('Firestore save error:', e); }
 }
 
 function save() {
-  // Local backup
-  try { localStorage.setItem('kakebo_bkp', JSON.stringify(ST)); } catch(e) {}
-  // Debounced cloud save
+  // Siempre guardar local primero (instantáneo)
+  try { localStorage.setItem(LS_KEY, JSON.stringify(ST)); } catch(e) {}
+  // Luego sync a Firestore (si hay uid)
   clearTimeout(saveDebounce);
-  saveDebounce = setTimeout(saveToFirestore, 1200);
+  saveDebounce = setTimeout(firestoreSave, 1500);
 }
 
 window.borrarTodo = function() {
@@ -1075,98 +1091,107 @@ window.borrarTodo = function() {
   save(); renderAll(); toast('App reiniciada');
 }
 
-// ─── AUTH ───
-let loginTab = 'login';
-window.switchLoginTab = function(t) {
-  loginTab = t;
-  document.getElementById('lt-login').className = 'login-tab' + (t==='login'?' on':'');
-  document.getElementById('lt-reg').className = 'login-tab' + (t==='reg'?' on':'');
-  document.getElementById('btn-login-do').textContent = t==='login' ? 'Entrar' : 'Crear cuenta';
-  document.getElementById('login-err').textContent = '';
-};
+// ─── AUTH LOCAL (sin Firebase Auth) ───
+let currentUser = null;
+
+// Función simple para crear un ID único basado en nombre+pin
+function hashSimple(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) - h) + str.charCodeAt(i);
+    h |= 0;
+  }
+  return Math.abs(h).toString(36);
+}
 
 window.doLogin = async function() {
-  const email = document.getElementById('l-email').value.trim();
-  const pass  = document.getElementById('l-pass').value;
-  const err   = document.getElementById('login-err');
-  const btn   = document.getElementById('btn-login-do');
+  const nombre = document.getElementById('l-nombre').value.trim();
+  const pin    = document.getElementById('l-pin').value.trim();
+  const err    = document.getElementById('login-err');
+  const btn    = document.getElementById('btn-login-do');
   err.textContent = '';
-  if (!email || !pass) { err.textContent = 'Completa email y contraseña.'; return; }
+
+  if (!nombre) { err.textContent = 'Ingresá tu nombre o apodo.'; return; }
+  if (!pin || pin.length < 4) { err.textContent = 'El PIN debe tener 4 dígitos.'; return; }
+  if (!/^\d{4}$/.test(pin)) { err.textContent = 'El PIN debe ser 4 números.'; return; }
+
   btn.textContent = '⏳ Entrando...';
   btn.disabled = true;
-  try {
-    if (loginTab === 'login') {
-      await signInWithEmailAndPassword(auth, email, pass);
-    } else {
-      await createUserWithEmailAndPassword(auth, email, pass);
-    }
-  } catch(e) {
-    console.error('Firebase auth error:', e.code, e.message);
-    const msgs = {
-      'auth/invalid-credential':   'Email o contraseña incorrectos.',
-      'auth/user-not-found':       'No existe cuenta con ese email.',
-      'auth/wrong-password':       'Contraseña incorrecta.',
-      'auth/email-already-in-use': 'Ese email ya tiene cuenta. Usá Entrar.',
-      'auth/weak-password':        'La contraseña debe tener al menos 6 caracteres.',
-      'auth/invalid-email':        'Email inválido.',
-      'auth/network-request-failed': 'Sin conexión a internet.',
-      'auth/unauthorized-domain':  'Dominio no autorizado en Firebase. Agregá mauricio503.github.io en Firebase Console > Authentication > Settings > Authorized domains.',
-      'auth/operation-not-allowed': 'El método Email/Contraseña no está habilitado en Firebase.',
-    };
-    err.style.color = '#ff8a80';
-    err.textContent = msgs[e.code] || ('Error ' + e.code + ': ' + e.message);
-  } finally {
-    btn.textContent = loginTab === 'login' ? 'Entrar' : 'Crear cuenta';
-    btn.disabled = false;
-  }
-};
 
-window.doAnon = async function() {
-  const err = document.getElementById('login-err');
-  err.textContent = '⏳ Entrando...';
-  try {
-    await signInAnonymously(auth);
-  } catch(e) {
-    console.error('Anon auth error:', e.code, e.message);
-    err.style.color = '#ff8a80';
-    err.textContent = 'Error modo anonimo: ' + e.code + ' — ' + e.message;
-  }
-};
+  // Crear ID único basado en nombre+pin
+  const uid = 'u_' + hashSimple(nombre.toLowerCase() + pin);
 
-window.doLogout = async function() {
-  if (!confirm('¿Cerrar sesion?')) return;
-  if (unsubFirestore) { unsubFirestore(); unsubFirestore = null; }
-  await signOut(auth);
-};
+  // Verificar si ya existe este usuario en localStorage
+  const savedUser = localStorage.getItem('kakebo_user');
+  let userData = savedUser ? JSON.parse(savedUser) : null;
 
-onAuthStateChanged(auth, async (user) => {
-  if (user) {
-    currentUser = user;
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app-screen').style.display = 'block';
-    const badge = document.getElementById('user-badge');
-    badge.textContent = user.isAnonymous ? 'Anonimo | Salir' : (user.email?.split('@')[0] || 'Usuario') + ' | Salir';
-    // Load data
-    await loadFromFirestore(user.uid);
-    if (!ST.metasPersonales) ST.metasPersonales = [];
-    if (!ST.cobros) ST.cobros = [];
-    if (!ST.agenda) ST.agenda = {};
-    renderAll();
-    initChat();
-    updAcrSelect();
-    document.getElementById('hdr-fecha').textContent = new Date().toLocaleDateString('es-AR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
-    document.getElementById('r-fecha').value = HOY;
-    const nm = new Date(); nm.setMonth(nm.getMonth()+3);
-    document.getElementById('m-plazo').value = nm.toISOString().slice(0,7);
-    setMode(ST.modo || 'offline');
-    applyTheme(ST.cfg.darkMode || false);
-    setTimeout(checkBalancesPendientes, 2000);
+  if (userData && userData.uid === uid) {
+    // Usuario existente — OK
+    currentUser = { uid, nombre, displayName: nombre };
+  } else if (!userData) {
+    // Usuario nuevo — crear
+    currentUser = { uid, nombre, displayName: nombre };
+    localStorage.setItem('kakebo_user', JSON.stringify(currentUser));
+    toast('¡Cuenta creada! Bienvenido/a ' + nombre);
   } else {
-    currentUser = null;
-    document.getElementById('login-screen').style.display = 'flex';
-    document.getElementById('app-screen').style.display = 'none';
+    // Nombre existe pero PIN diferente
+    err.textContent = 'PIN incorrecto para "' + nombre + '". Probá de nuevo.';
+    btn.textContent = 'Entrar / Registrarse';
+    btn.disabled = false;
+    return;
   }
-});
+
+  localStorage.setItem('kakebo_user', JSON.stringify(currentUser));
+  btn.textContent = 'Entrar / Registrarse';
+  btn.disabled = false;
+  await iniciarApp();
+};
+
+window.doLogout = function() {
+  if (!confirm('¿Cerrar sesion?')) return;
+  currentUser = null;
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app-screen').style.display = 'none';
+};
+
+async function iniciarApp() {
+  if (!currentUser) return;
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app-screen').style.display = 'block';
+  const badge = document.getElementById('user-badge');
+  badge.textContent = (currentUser.nombre || 'Usuario') + ' | Salir';
+  // Cargar local primero (instantáneo)
+  localLoad();
+  // Luego intentar sync con Firestore
+  await firestoreLoad(currentUser.uid);
+  if (!ST.metasPersonales) ST.metasPersonales = [];
+  if (!ST.cobros) ST.cobros = [];
+  if (!ST.agenda) ST.agenda = {};
+  renderAll();
+  initChat();
+    updAcrSelect();
+  document.getElementById('hdr-fecha').textContent = new Date().toLocaleDateString('es-AR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  document.getElementById('r-fecha').value = HOY;
+  const nm2 = new Date(); nm2.setMonth(nm2.getMonth()+3);
+  document.getElementById('m-plazo').value = nm2.toISOString().slice(0,7);
+  setMode(ST.modo || 'offline');
+  applyTheme(ST.cfg.darkMode || false);
+  setTimeout(checkBalances, 2000);
+}
+
+// ── Auto-login si ya hay sesión guardada ──
+(async function() {
+  const savedUser = localStorage.getItem('kakebo_user');
+  if (savedUser) {
+    try {
+      currentUser = JSON.parse(savedUser);
+      await iniciarApp();
+    } catch(e) {
+      localStorage.removeItem('kakebo_user');
+    }
+  }
+  // Si no hay sesión, mostrar login (ya está visible por defecto)
+})();
 
 // ─── HELPERS ───
 const fmt = n => '$' + Math.round(n).toLocaleString('es-AR');
