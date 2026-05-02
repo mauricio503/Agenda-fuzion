@@ -6,10 +6,7 @@
 <meta name="theme-color" content="#3A1078">
 <title>Kakebo PRO+ 2026</title>
 <link rel="manifest" href="./manifest.json">
-<!-- Firebase CDN compat - funciona en cualquier hosting sin configuración -->
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -1001,8 +998,39 @@ const firebaseConfig = {
   appId: "1:640118647734:web:3cfc831108550591836f17"
 };
 
-const fbApp = firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
+
+
+// ── Firebase carga ASYNC no bloqueante ──
+let db = null;
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => { console.warn('Script failed:', src); resolve(); };
+    document.head.appendChild(s);
+  });
+}
+
+async function initFirebase() {
+  try {
+    await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js');
+    await loadScript('https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js');
+    if (typeof firebase === 'undefined') { console.warn('Firebase no cargó'); return; }
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+    console.log('Firebase conectado OK');
+    // Intentar sync si ya hay usuario logueado y db está disponible
+    const uid = getUserId();
+    if (uid && db) firestoreLoad(uid);
+  } catch(e) {
+    console.warn('Firebase no disponible, usando localStorage:', e.message);
+    db = null;
+  }
+}
+
+
 
 // ─── ESTADO GLOBAL ───
 const HOY = new Date().toISOString().slice(0, 10);
@@ -1047,14 +1075,13 @@ function localLoad() {
 }
 
 async function firestoreLoad(uid) {
+  if (!db) return; // Firebase no disponible, usar solo local
   try {
     const ref = db.collection('kakebo_users').doc(uid);
     const snap = await ref.get();
     if (snap.exists) {
       const remote = snap.data();
-      // Firestore tiene prioridad sobre local
       ST = { ...ST, ...remote };
-      // Actualizar local con datos de Firestore
       localStorage.setItem(LS_KEY, JSON.stringify(ST));
     }
   } catch(e) { console.warn('Firestore load error (usando local):', e); }
@@ -1062,7 +1089,7 @@ async function firestoreLoad(uid) {
 
 async function firestoreSave() {
   const uid = getUserId();
-  if (!uid) return;
+  if (!uid || !db) return;
   try {
     const ref = db.collection('kakebo_users').doc(uid);
     await ref.set(ST);
@@ -1093,7 +1120,6 @@ window.borrarTodo = function() {
 }
 
 // ─── AUTH LOCAL (sin Firebase Auth) ───
-let currentUser = null;
 
 // Función simple para crear un ID único basado en nombre+pin
 function hashSimple(str) {
@@ -1120,26 +1146,37 @@ window.doLogin = async function() {
   btn.disabled = true;
 
   // Crear ID único basado en nombre+pin
-  const uid = 'u_' + hashSimple(nombre.toLowerCase() + pin);
+  const nombreNorm = nombre.toLowerCase().trim();
+  const uid = 'u_' + hashSimple(nombreNorm + pin);
 
   // Verificar si ya existe este usuario en localStorage
   const savedUser = localStorage.getItem('kakebo_user');
   let userData = savedUser ? JSON.parse(savedUser) : null;
 
   if (userData && userData.uid === uid) {
-    // Usuario existente — OK
+    // Usuario existente con mismo nombre+PIN — OK
     currentUser = { uid, nombre, displayName: nombre };
   } else if (!userData) {
-    // Usuario nuevo — crear
+    // No hay usuario guardado — crear nuevo
     currentUser = { uid, nombre, displayName: nombre };
     localStorage.setItem('kakebo_user', JSON.stringify(currentUser));
     toast('¡Cuenta creada! Bienvenido/a ' + nombre);
-  } else {
-    // Nombre existe pero PIN diferente
+  } else if (userData.nombre && userData.nombre.toLowerCase().trim() === nombreNorm) {
+    // Mismo nombre pero PIN diferente (uid no coincide)
     err.textContent = 'PIN incorrecto para "' + nombre + '". Probá de nuevo.';
     btn.textContent = 'Entrar / Registrarse';
     btn.disabled = false;
     return;
+  } else {
+    // Nombre diferente al usuario guardado — advertir antes de sobreescribir
+    if (!confirm('Ya hay una sesión con el usuario "' + userData.nombre + '". ¿Querés iniciar sesión con "' + nombre + '"? (Los datos del usuario anterior quedan en la nube si tenía sync)')) {
+      btn.textContent = 'Entrar / Registrarse';
+      btn.disabled = false;
+      return;
+    }
+    currentUser = { uid, nombre, displayName: nombre };
+    localStorage.setItem('kakebo_user', JSON.stringify(currentUser));
+    toast('Sesión iniciada como ' + nombre);
   }
 
   localStorage.setItem('kakebo_user', JSON.stringify(currentUser));
@@ -3645,6 +3682,9 @@ window.addPago = function() {
   document.getElementById('d-monto').value = '';
 };
 
+
+// ─── INICIAR FIREBASE EN SEGUNDO PLANO ───
+initFirebase(); // No await - no bloquea la app
 
 // ─── PWA ───
 if('serviceWorker' in navigator){
